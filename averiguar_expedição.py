@@ -154,6 +154,22 @@ def formatar_nota_fiscal(valor):
     
     return valor_limpo
 
+def converter_para_inteiro_nota_fiscal(valor):
+    """
+    Converte a nota fiscal para inteiro (remove zeros à esquerda)
+    """
+    if pd.isna(valor) or valor == '':
+        return 0
+    
+    # Primeiro formata corretamente
+    valor_formatado = formatar_nota_fiscal(valor)
+    
+    # Converte para inteiro (isso remove zeros à esquerda)
+    try:
+        return int(valor_formatado) if valor_formatado else 0
+    except:
+        return 0
+
 def ler_csv_com_cabecalho(caminho, data_inicio=None, data_fim=None):
     """
     Lê o CSV detectando automaticamente o cabeçalho e filtrando por data se especificado
@@ -529,17 +545,24 @@ def processar_planilhas():
                 divergencias.append(f"Possível erro de digitação no R$ NF: {valor_original}")
         
         if divergencias:
+            # CONVERTE NF PARA INTEIRO
+            nf_inteiro = converter_para_inteiro_nota_fiscal(nf)
+            
+            # CONVERTE PESO_CSV E TOTAL_CSV PARA FLOAT
+            peso_csv_float = float(peso_csv) if peso_csv else 0.0
+            total_csv_float = float(total_csv) if total_csv else 0.0
+            
             resultados.append({
-                'NF': nf,
+                'NF': nf_inteiro,  # AGORA É INTEIRO
                 'DATA_EXPEDICAO': data_expedicao,  # Data da expedição
                 'DATA_CSV': data_csv,              # Data do CSV
                 'STATUS': status,
                 'OPERAÇÃO': operacao,
                 'Divergências': ' | '.join(divergencias),
                 'VOG_Expedição': row['VOG'],
-                'PESO_CSV': row['PESO'] if 'PESO' in row else '',
+                'PESO_CSV': peso_csv_float,  # AGORA É FLOAT
                 'R$ NF_Expedição': row['R$ NF'],
-                'TOTAL_CSV': row['TOTAL'] if 'TOTAL' in row else ''
+                'TOTAL_CSV': total_csv_float  # AGORA É FLOAT
             })
     
     # 2. DIVERGÊNCIAS DO CSV (NFs que não estão no controle de expedição)
@@ -551,17 +574,24 @@ def processar_planilhas():
         peso_csv = row['PESO'] if 'PESO' in row else ''
         total_csv = row['TOTAL'] if 'TOTAL' in row else ''
         
+        # CONVERTE NF PARA INTEIRO
+        nf_inteiro = converter_para_inteiro_nota_fiscal(nf)
+        
+        # CONVERTE PESO_CSV E TOTAL_CSV PARA FLOAT
+        peso_csv_float = limpar_valor_numerico(peso_csv) if peso_csv else 0.0
+        total_csv_float = limpar_valor_monetario(total_csv) if total_csv else 0.0
+        
         resultados.append({
-            'NF': nf,
+            'NF': nf_inteiro,      # AGORA É INTEIRO
             'DATA_EXPEDICAO': None,      # Não tem data da expedição
             'DATA_CSV': data_csv,        # Data do CSV
             'STATUS': 'N/A',
             'OPERAÇÃO': 'N/A',
             'Divergências': 'NF do CSV não encontrada no controle de expedição',
             'VOG_Expedição': 'N/A',
-            'PESO_CSV': peso_csv,
+            'PESO_CSV': peso_csv_float,  # AGORA É FLOAT
             'R$ NF_Expedição': 'N/A',
-            'TOTAL_CSV': total_csv
+            'TOTAL_CSV': total_csv_float  # AGORA É FLOAT
         })
     
     # Cria relatório final
@@ -605,6 +635,23 @@ def processar_planilhas():
                         cell = worksheet[f'{col_letter}{row}']
                         if cell.value and not pd.isna(cell.value):
                             cell.number_format = 'DD/MM/YYYY'
+            
+            # Formata a coluna NF como número inteiro sem decimais
+            for col_idx, col_name in enumerate(df_relatorio.columns):
+                if col_name == 'NF':
+                    col_letter = chr(65 + col_idx)  # 65 = 'A'
+                    for row in range(2, len(df_relatorio) + 2):
+                        cell = worksheet[f'{col_letter}{row}']
+                        cell.number_format = '0'
+            
+            # Formata as colunas PESO_CSV e TOTAL_CSV como float com 2 casas decimais
+            float_columns = ['PESO_CSV', 'TOTAL_CSV']
+            for col_idx, col_name in enumerate(df_relatorio.columns):
+                if col_name in float_columns:
+                    col_letter = chr(65 + col_idx)
+                    for row in range(2, len(df_relatorio) + 2):
+                        cell = worksheet[f'{col_letter}{row}']
+                        cell.number_format = '#,##0.00'
             
             # Ajusta a largura das colunas automaticamente
             for column in worksheet.columns:
