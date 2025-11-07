@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import os
 from pathlib import Path
+from datetime import datetime
 
 def limpar_valor_monetario(valor):
     """
@@ -117,9 +118,45 @@ def detectar_separador_csv(caminho):
     except:
         return ';'
 
-def ler_csv_com_cabecalho(caminho):
+def limpar_numero_nota_fiscal(valor):
     """
-    Lê o CSV detectando automaticamente o cabeçalho
+    Limpa o número da nota fiscal mantendo zeros à esquerda e convertendo para string
+    """
+    if pd.isna(valor) or valor == '':
+        return ''
+    
+    # Converte para string
+    valor_str = str(valor).strip()
+    
+    # Remove todos os caracteres não numéricos
+    valor_limpo = ''.join(c for c in valor_str if c.isdigit())
+    
+    return valor_limpo
+
+def formatar_nota_fiscal(valor):
+    """
+    Formata a nota fiscal corretamente, tratando o problema do zero extra
+    """
+    if pd.isna(valor) or valor == '':
+        return ''
+    
+    # Converte para string
+    valor_str = str(valor).strip()
+    
+    # Remove todos os caracteres não numéricos
+    valor_limpo = ''.join(c for c in valor_str if c.isdigit())
+    
+    # CORREÇÃO: Remove zero extra no final se a NF tiver 7 dígitos
+    # Notas fiscais normalmente têm 6 dígitos (112624), mas podem ter zeros extras
+    if len(valor_limpo) == 7 and valor_limpo.endswith('0'):
+        # Remove o último zero se a NF tiver 7 dígitos e terminar com zero
+        valor_limpo = valor_limpo[:-1]
+    
+    return valor_limpo
+
+def ler_csv_com_cabecalho(caminho, data_inicio=None, data_fim=None):
+    """
+    Lê o CSV detectando automaticamente o cabeçalho e filtrando por data se especificado
     """
     separador = detectar_separador_csv(caminho)
     
@@ -130,11 +167,11 @@ def ler_csv_com_cabecalho(caminho):
         print(f"Colunas disponíveis no CSV: {colunas_disponiveis}")
         
         # Mapeia possíveis nomes de colunas
-        colunas_necessarias = []
         mapeamento_colunas = {
             'NOTA FISCAL': ['NOTA FISCAL', 'NOTAFISCAL', 'NOTA_FISCAL', 'NF', 'NOTA'],
             'PESO': ['PESO', 'PESO_KG', 'PESO KG', 'PESO_TOTAL'],
-            'TOTAL': ['TOTAL', 'TOTAL_NF', 'VALOR_TOTAL', 'VALOR TOTAL', 'VALOR']
+            'TOTAL': ['TOTAL', 'TOTAL_NF', 'VALOR_TOTAL', 'VALOR TOTAL', 'VALOR'],
+            'DATA': ['DATA', 'DATE', 'DT', 'DATA_NF', 'DATA EMISSÃO', 'EMISSÃO']
         }
         
         colunas_para_ler = []
@@ -146,9 +183,9 @@ def ler_csv_com_cabecalho(caminho):
                     print(f"Usando coluna '{coluna_csv}' para {coluna_base}")
                     encontrou = True
                     break
-            if not encontrou:
-                print(f"AVISO: Coluna {coluna_base} não encontrada. Alternativas: {alternativas}")
-                return None
+            if not encontrou and coluna_base == 'DATA' and (data_inicio or data_fim):
+                print(f"AVISO: Coluna DATA não encontrada. Não será possível filtrar por período.")
+                print(f"Alternativas procuradas: {alternativas}")
         
         # Agora lê o arquivo completo com as colunas detectadas
         df = pd.read_csv(caminho, sep=separador, usecols=colunas_para_ler, encoding='utf-8')
@@ -161,6 +198,30 @@ def ler_csv_com_cabecalho(caminho):
                     rename_dict[coluna_csv] = coluna_base
         
         df = df.rename(columns=rename_dict)
+        
+        # Filtra por data se especificado e se a coluna DATA existe
+        if (data_inicio or data_fim) and 'DATA' in df.columns:
+            print("Filtrando CSV por período de datas...")
+            
+            # Converte a coluna DATA para datetime
+            try:
+                df['DATA'] = pd.to_datetime(df['DATA'], dayfirst=True, errors='coerce')
+                
+                # Aplica os filtros de data
+                if data_inicio:
+                    df = df[df['DATA'] >= data_inicio]
+                if data_fim:
+                    # Adiciona 1 dia para incluir a data final completa
+                    data_fim_ajustada = data_fim + pd.Timedelta(days=1)
+                    df = df[df['DATA'] < data_fim_ajustada]
+                
+                print(f"Período filtrado no CSV: {data_inicio.strftime('%d/%m/%Y') if data_inicio else 'Início indefinido'} a {data_fim.strftime('%d/%m/%Y') if data_fim else 'Fim indefinido'}")
+                print(f"Registros no CSV após filtro de data: {len(df)}")
+                
+            except Exception as e:
+                print(f"Erro ao filtrar CSV por data: {e}")
+                print("Continuando sem filtro de data no CSV...")
+        
         return df
         
     except Exception as e:
@@ -176,7 +237,8 @@ def ler_csv_com_cabecalho(caminho):
             mapeamento_colunas = {
                 'NOTA FISCAL': ['NOTA FISCAL', 'NOTAFISCAL', 'NOTA_FISCAL', 'NF', 'NOTA'],
                 'PESO': ['PESO', 'PESO_KG', 'PESO KG', 'PESO_TOTAL'],
-                'TOTAL': ['TOTAL', 'TOTAL_NF', 'VALOR_TOTAL', 'VALOR TOTAL', 'VALOR']
+                'TOTAL': ['TOTAL', 'TOTAL_NF', 'VALOR_TOTAL', 'VALOR TOTAL', 'VALOR'],
+                'DATA': ['DATA', 'DATE', 'DT', 'DATA_NF', 'DATA EMISSÃO', 'EMISSÃO']
             }
             
             for coluna_base, alternativas in mapeamento_colunas.items():
@@ -196,16 +258,74 @@ def ler_csv_com_cabecalho(caminho):
                         rename_dict[coluna_csv] = coluna_base
             
             df = df.rename(columns=rename_dict)
+            
+            # Filtra por data se especificado e se a coluna DATA existe
+            if (data_inicio or data_fim) and 'DATA' in df.columns:
+                print("Filtrando CSV por período de datas...")
+                
+                # Converte a coluna DATA para datetime
+                try:
+                    df['DATA'] = pd.to_datetime(df['DATA'], dayfirst=True, errors='coerce')
+                    
+                    # Aplica os filtros de data
+                    if data_inicio:
+                        df = df[df['DATA'] >= data_inicio]
+                    if data_fim:
+                        # Adiciona 1 dia para incluir a data final completa
+                        data_fim_ajustada = data_fim + pd.Timedelta(days=1)
+                        df = df[df['DATA'] < data_fim_ajustada]
+                    
+                    print(f"Período filtrado no CSV: {data_inicio.strftime('%d/%m/%Y') if data_inicio else 'Início indefinido'} a {data_fim.strftime('%d/%m/%Y') if data_fim else 'Fim indefinido'}")
+                    print(f"Registros no CSV após filtro de data: {len(df)}")
+                    
+                except Exception as e:
+                    print(f"Erro ao filtrar CSV por data: {e}")
+                    print("Continuando sem filtro de data no CSV...")
+            
             return df
             
         except Exception as e2:
             print(f"Erro ao ler CSV com encoding alternativo: {e2}")
             return None
 
+def obter_periodo_usuario():
+    """
+    Solicita o período desejado ao usuário
+    """
+    print("\n=== FILTRO POR PERÍODO ===")
+    print("Digite o período que deseja analisar (formato DD/MM/AAAA)")
+    print("Deixe em branco para não usar filtro de data")
+    
+    while True:
+        data_inicio_str = input("Data de início (DD/MM/AAAA): ").strip()
+        data_fim_str = input("Data de fim (DD/MM/AAAA): ").strip()
+        
+        data_inicio = None
+        data_fim = None
+        
+        try:
+            if data_inicio_str:
+                data_inicio = datetime.strptime(data_inicio_str, '%d/%m/%Y')
+            if data_fim_str:
+                data_fim = datetime.strptime(data_fim_str, '%d/%m/%Y')
+            
+            # Validação das datas
+            if data_inicio and data_fim and data_inicio > data_fim:
+                print("ERRO: Data de início não pode ser maior que data de fim!")
+                continue
+                
+            return data_inicio, data_fim
+            
+        except ValueError as e:
+            print("ERRO: Formato de data inválido! Use DD/MM/AAAA")
+            continuar = input("Deseja tentar novamente? (S/N): ").strip().upper()
+            if continuar != 'S':
+                return None, None
+
 def processar_planilhas():
     # Caminhos das planilhas
-    caminho_expedicao = r"Z:\RODRIGO - LOGISTICA\Cópia de CONTROLE DE EXPEDIÇÃO - OUTUBRO.xlsx"
-    caminho_csv = r"S:\hor\excel\20251027.csv"
+    caminho_expedicao = r"Z:\RODRIGO - LOGISTICA\CONTROLE DE EXPEDIÇÃO NOVEMBRO.xlsx"
+    caminho_csv = r"S:\hor\excel\20251101.csv"
     
     # Verifica se os arquivos existem
     if not os.path.exists(caminho_expedicao):
@@ -216,14 +336,18 @@ def processar_planilhas():
         print(f"ERRO: Arquivo não encontrado: {caminho_csv}")
         return
     
+    # Solicita o período ao usuário
+    data_inicio, data_fim = obter_periodo_usuario()
+    
     try:
-        # Lê a planilha de controle de expedição
+        # Lê a planilha de controle de expedição - AGORA INCLUINDO OPERAÇÃO
         print("Lendo planilha de controle de expedição...")
         df_expedicao = pd.read_excel(
             caminho_expedicao, 
             sheet_name='JAN-FEV-MAR-ABR-MAI-JUN',
             header=3,  # Cabeçalho na linha 4 (índice 3)
-            usecols=['NF', 'VOG', 'R$ NF', 'STATUS']
+            usecols=['NF', 'VOG', 'R$ NF', 'STATUS', 'DATA', 'OPERAÇÃO'],  # Adicionando OPERAÇÃO
+            dtype={'NF': str}  # Força a leitura como string
         )
         
         # Remove linhas com NF vazia
@@ -233,26 +357,59 @@ def processar_planilhas():
         status_validos = ['ENTREGUE', 'EM ROTA', 'DEVOLUÇÃO']
         df_expedicao_filtrado = df_expedicao[df_expedicao['STATUS'].isin(status_validos)].copy()
         
+        # FILTRA POR OPERAÇÃO VOG
+        operacoes_vog = ['VOG', 'VOG 2ºSAIDA', 'VOG 2 SAIDA', 'VOG 2SAIDA', 'VOG 2º SAIDA']
+        df_expedicao_filtrado = df_expedicao_filtrado[
+            df_expedicao_filtrado['OPERAÇÃO'].isin(operacoes_vog)
+        ]
+        
         print(f"Total de notas fiscais: {len(df_expedicao)}")
         print(f"Notas fiscais com status válido ({', '.join(status_validos)}): {len(df_expedicao_filtrado)}")
+        print(f"Notas fiscais com operação VOG: {len(df_expedicao_filtrado)}")
         
-        # Converte NF para string e remove espaços
-        df_expedicao_filtrado['NF'] = df_expedicao_filtrado['NF'].astype(str).str.strip()
+        # CORREÇÃO: Usa a função específica para formatar notas fiscais
+        df_expedicao_filtrado['NF'] = df_expedicao_filtrado['NF'].apply(formatar_nota_fiscal)
         
-        # Limpa os valores monetários
+        print("Exemplo de notas fiscais após formatação:")
+        print(df_expedicao_filtrado['NF'].head(10).tolist())
+        
+        # Converte a coluna DATA da planilha de expedição para datetime
+        if 'DATA' in df_expedicao_filtrado.columns:
+            # Cria uma cópia da coluna DATA para usar no relatório final
+            df_expedicao_filtrado['DATA_RELATORIO'] = pd.to_datetime(df_expedicao_filtrado['DATA'], errors='coerce')
+            
+            # APLICA FILTRO DE DATA NA PLANILHA DE EXPEDIÇÃO
+            if data_inicio or data_fim:
+                print("Filtrando controle de expedição por período de datas...")
+                
+                # Aplica os filtros de data
+                if data_inicio:
+                    df_expedicao_filtrado = df_expedicao_filtrado[df_expedicao_filtrado['DATA_RELATORIO'] >= data_inicio]
+                if data_fim:
+                    # Adiciona 1 dia para incluir a data final completa
+                    data_fim_ajustada = data_fim + pd.Timedelta(days=1)
+                    df_expedicao_filtrado = df_expedicao_filtrado[df_expedicao_filtrado['DATA_RELATORIO'] < data_fim_ajustada]
+                
+                print(f"Período filtrado na expedição: {data_inicio.strftime('%d/%m/%Y') if data_inicio else 'Início indefinido'} a {data_fim.strftime('%d/%m/%Y') if data_fim else 'Fim indefinido'}")
+                print(f"Notas fiscais na expedição após filtro de data: {len(df_expedicao_filtrado)}")
+        else:
+            print("AVISO: Coluna DATA não encontrada na planilha de expedição")
+            df_expedicao_filtrado['DATA_RELATORIO'] = None
+        
+        # Limpa os valores monetários (usaremos apenas internamente para comparação)
         print("Limpando valores do controle de expedição...")
-        df_expedicao_filtrado['VOG_limpo'] = df_expedicao_filtrado['VOG'].apply(limpar_valor_numerico)
-        df_expedicao_filtrado['R$ NF_limpo'] = df_expedicao_filtrado['R$ NF'].apply(limpar_valor_monetario)
+        vog_limpo = df_expedicao_filtrado['VOG'].apply(limpar_valor_numerico)
+        valor_nf_limpo = df_expedicao_filtrado['R$ NF'].apply(limpar_valor_monetario)
         
-        print(f"Encontradas {len(df_expedicao_filtrado)} notas fiscais válidas no controle de expedição")
+        print(f"Encontradas {len(df_expedicao_filtrado)} notas fiscais válidas no controle de expedição (após filtros)")
         
     except Exception as e:
         print(f"Erro ao ler planilha de expedição: {e}")
         return
     
-    # Lê o arquivo CSV com detecção automática de colunas
+    # Lê o arquivo CSV com detecção automática de colunas e filtro de data
     print("Lendo arquivo CSV...")
-    df_csv = ler_csv_com_cabecalho(caminho_csv)
+    df_csv = ler_csv_com_cabecalho(caminho_csv, data_inicio, data_fim)
     
     if df_csv is None:
         print("Não foi possível ler o arquivo CSV. Verifique o formato do arquivo.")
@@ -263,23 +420,41 @@ def processar_planilhas():
     # Remove linhas com NOTA FISCAL vazia
     df_csv = df_csv.dropna(subset=['NOTA FISCAL'])
     
-    # Converte NOTA FISCAL para string e remove espaços
-    df_csv['NOTA FISCAL'] = df_csv['NOTA FISCAL'].astype(str).str.strip()
+    # CORREÇÃO: Usa a função específica para formatar notas fiscais no CSV também
+    df_csv['NOTA FISCAL'] = df_csv['NOTA FISCAL'].apply(formatar_nota_fiscal)
     
-    # Limpa as colunas numéricas do CSV
+    print("Exemplo de notas fiscais do CSV após formatação:")
+    print(df_csv['NOTA FISCAL'].head(10).tolist())
+    
+    # Limpa as colunas numéricas do CSV (usaremos apenas internamente para comparação)
     print("Limpando valores numéricos do CSV...")
-    df_csv['PESO_limpo'] = df_csv['PESO'].apply(limpar_valor_numerico)
-    df_csv['TOTAL_limpo'] = df_csv['TOTAL'].apply(limpar_valor_monetario)
+    peso_limpo = df_csv['PESO'].apply(limpar_valor_numerico)
+    total_limpo = df_csv['TOTAL'].apply(limpar_valor_monetario)
     
-    # Agrupa por NOTA FISCAL e soma PESO e TOTAL
+    # Adiciona as colunas limpas ao DataFrame original para agrupamento
+    df_csv['PESO_COMPARACAO'] = peso_limpo
+    df_csv['TOTAL_COMPARACAO'] = total_limpo
+    
+    # Cria um dicionário com todas as datas do CSV para consulta rápida
+    dict_datas_csv = {}
+    for index, row in df_csv.iterrows():
+        nf = row['NOTA FISCAL']
+        data = row['DATA'] if 'DATA' in row and not pd.isna(row['DATA']) else None
+        if nf not in dict_datas_csv and data is not None:
+            dict_datas_csv[nf] = data
+    
+    # Agrupa por NOTA FISCAL mantendo a DATA e somando os valores
     df_agrupado = df_csv.groupby('NOTA FISCAL').agg({
-        'PESO_limpo': 'sum',
-        'TOTAL_limpo': 'sum'
+        'PESO': 'first',           # Mantém o valor original do PESO
+        'TOTAL': 'first',          # Mantém o valor original do TOTAL
+        'DATA': 'first',           # Mantém a primeira data encontrada
+        'PESO_COMPARACAO': 'sum',  # Soma os valores limpos para comparação
+        'TOTAL_COMPARACAO': 'sum'  # Soma os valores limpos para comparação
     }).reset_index()
     
-    print(f"Encontradas {len(df_agrupado)} notas fiscais únicas no CSV")
+    print(f"Encontradas {len(df_agrupado)} notas fiscais únicas no CSV (após filtros)")
     
-    # Realiza o merge das planilhas
+    # Realiza o merge das planilhas - AGORA USANDO STRINGS
     print("Comparando as planilhas...")
     df_comparacao = pd.merge(
         df_expedicao_filtrado,
@@ -290,17 +465,43 @@ def processar_planilhas():
         indicator=True
     )
     
+    # VERIFICA ITENS DO CSV QUE NÃO ESTÃO NO CONTROLE DE EXPEDIÇÃO
+    df_csv_sem_expedicao = pd.merge(
+        df_agrupado,
+        df_expedicao_filtrado,
+        left_on='NOTA FISCAL',
+        right_on='NF',
+        how='left',
+        indicator=True
+    )
+    nfs_csv_sem_expedicao = df_csv_sem_expedicao[df_csv_sem_expedicao['_merge'] == 'left_only']
+    
     # Identifica divergências
     resultados = []
     
+    # 1. DIVERGÊNCIAS DO CONTROLE DE EXPEDIÇÃO (NFs que não estão no CSV)
     for index, row in df_comparacao.iterrows():
         nf = row['NF']
-        vog_expedicao = row['VOG_limpo']
-        valor_nf_expedicao = row['R$ NF_limpo']
-        peso_csv = row['PESO_limpo'] if not pd.isna(row['PESO_limpo']) else 0
-        total_csv = row['TOTAL_limpo'] if not pd.isna(row['TOTAL_limpo']) else 0
+        vog_expedicao = vog_limpo.iloc[index] if index < len(vog_limpo) else 0
+        valor_nf_expedicao = valor_nf_limpo.iloc[index] if index < len(valor_nf_limpo) else 0
+        peso_csv = row['PESO_COMPARACAO'] if 'PESO_COMPARACAO' in row and not pd.isna(row['PESO_COMPARACAO']) else 0
+        total_csv = row['TOTAL_COMPARACAO'] if 'TOTAL_COMPARACAO' in row and not pd.isna(row['TOTAL_COMPARACAO']) else 0
         status = row['STATUS']
+        operacao = row['OPERAÇÃO'] if 'OPERAÇÃO' in row else ''
         merge_status = row['_merge']
+        
+        # Obtém a data - PRIORIDADE para a data da planilha de expedição
+        data_final = None
+        
+        # Primeiro tenta a data da planilha de expedição (DATA_RELATORIO)
+        if 'DATA_RELATORIO' in row and not pd.isna(row['DATA_RELATORIO']):
+            data_final = row['DATA_RELATORIO']
+        # Se não tiver, tenta a data do CSV do merge
+        elif 'DATA' in row and not pd.isna(row['DATA']):
+            data_final = row['DATA']
+        # Se não tiver, tenta a data do dicionário do CSV
+        elif nf in dict_datas_csv:
+            data_final = dict_datas_csv[nf]
         
         divergencias = []
         
@@ -335,26 +536,77 @@ def processar_planilhas():
         if divergencias:
             resultados.append({
                 'NF': nf,
+                'DATA': data_final,  # Usa a data encontrada (prioridade para expedição)
                 'STATUS': status,
+                'OPERAÇÃO': operacao,
                 'Divergências': ' | '.join(divergencias),
                 'VOG_Expedição': row['VOG'],
-                'VOG_Limpo': vog_expedicao,
                 'PESO_CSV': row['PESO'] if 'PESO' in row else '',
-                'PESO_CSV_Limpo': peso_csv,
                 'R$ NF_Expedição': row['R$ NF'],
-                'R$ NF_Limpo': valor_nf_expedicao,
-                'TOTAL_CSV': row['TOTAL'] if 'TOTAL' in row else '',
-                'TOTAL_CSV_Limpo': total_csv
+                'TOTAL_CSV': row['TOTAL'] if 'TOTAL' in row else ''
             })
+    
+    # 2. DIVERGÊNCIAS DO CSV (NFs que não estão no controle de expedição)
+    for index, row in nfs_csv_sem_expedicao.iterrows():
+        nf = row['NOTA FISCAL']
+        # CORREÇÃO: Verifica se a coluna DATA existe antes de acessá-la
+        data_csv = row['DATA'] if 'DATA' in row and not pd.isna(row['DATA']) else None
+        
+        # CORREÇÃO: Verifica se as colunas PESO e TOTAL existem
+        peso_csv = row['PESO'] if 'PESO' in row else ''
+        total_csv = row['TOTAL'] if 'TOTAL' in row else ''
+        
+        resultados.append({
+            'NF': nf,
+            'DATA': data_csv,
+            'STATUS': 'N/A',
+            'OPERAÇÃO': 'N/A',
+            'Divergências': 'NF do CSV não encontrada no controle de expedição',
+            'VOG_Expedição': 'N/A',
+            'PESO_CSV': peso_csv,
+            'R$ NF_Expedição': 'N/A',
+            'TOTAL_CSV': total_csv
+        })
     
     # Cria relatório final
     if resultados:
         df_relatorio = pd.DataFrame(resultados)
         
+        # Reorganiza as colunas para colocar DATA logo após NF
+        colunas_ordenadas = ['NF', 'DATA', 'STATUS', 'OPERAÇÃO', 'Divergências', 'VOG_Expedição', 'PESO_CSV', 'R$ NF_Expedição', 'TOTAL_CSV']
+        # Garante que apenas as colunas existentes sejam usadas
+        colunas_ordenadas = [col for col in colunas_ordenadas if col in df_relatorio.columns]
+        df_relatorio = df_relatorio[colunas_ordenadas]
+        
         # Salva o relatório no Downloads
         downloads_path = str(Path.home() / "Downloads")
         caminho_relatorio = os.path.join(downloads_path, "RELATORIO_DIVERGENCIAS.xlsx")
-        df_relatorio.to_excel(caminho_relatorio, index=False)
+        
+        # Cria um ExcelWriter para formatar as colunas
+        with pd.ExcelWriter(caminho_relatorio, engine='openpyxl') as writer:
+            df_relatorio.to_excel(writer, index=False, sheet_name='Divergências')
+            
+            # Acessa a planilha para ajustar o formato das colunas
+            worksheet = writer.sheets['Divergências']
+            
+            # Formata a coluna DATA como data brasileira
+            for row in range(2, len(df_relatorio) + 2):  # +2 porque a linha 1 é o cabeçalho
+                cell = worksheet[f'B{row}']  # Coluna B é DATA
+                if cell.value and not pd.isna(cell.value):
+                    cell.number_format = 'DD/MM/YYYY'
+            
+            # Ajusta a largura das colunas automaticamente
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                worksheet.column_dimensions[column_letter].width = adjusted_width
         
         print(f"\n=== RELATÓRIO DE DIVERGÊNCIAS ===")
         print(f"Total de divergências encontradas: {len(resultados)}")
@@ -363,7 +615,9 @@ def processar_planilhas():
         # Exibe as primeiras 10 divergências
         print("\nPrimeiras 10 divergências:")
         for i, resultado in enumerate(resultados[:10]):
-            print(f"\n{i+1}. NF: {resultado['NF']} | Status: {resultado['STATUS']}")
+            # Formata a data para exibição no console
+            data_exibicao = resultado['DATA'].strftime('%d/%m/%Y') if resultado['DATA'] and not pd.isna(resultado['DATA']) else 'N/A'
+            print(f"\n{i+1}. NF: {resultado['NF']} | Data: {data_exibicao} | Status: {resultado['STATUS']} | Operação: {resultado['OPERAÇÃO']}")
             print(f"   Divergências: {resultado['Divergências']}")
             
         if len(resultados) > 10:
@@ -373,22 +627,35 @@ def processar_planilhas():
         print("\n✅ Nenhuma divergência encontrada! Todas as notas fiscais estão consistentes.")
     
     # Estatísticas adicionais
-    nfs_sem_match = len(df_comparacao[df_comparacao['_merge'] == 'left_only'])
-    if nfs_sem_match > 0:
-        print(f"\n⚠️  {nfs_sem_match} notas fiscais não foram encontradas no CSV")
+    nfs_sem_match_expedicao = len(df_comparacao[df_comparacao['_merge'] == 'left_only'])
+    nfs_sem_match_csv = len(nfs_csv_sem_expedicao)
+    
+    if nfs_sem_match_expedicao > 0:
+        print(f"\n⚠️  {nfs_sem_match_expedicao} notas fiscais do controle de expedição não foram encontradas no CSV")
+    
+    if nfs_sem_match_csv > 0:
+        print(f"⚠️  {nfs_sem_match_csv} notas fiscais do CSV não foram encontradas no controle de expedição")
     
     # Mostra algumas estatísticas
     print(f"\n=== ESTATÍSTICAS ===")
     print(f"Notas fiscais totais no controle de expedição: {len(df_expedicao)}")
-    print(f"Notas fiscais com status válido: {len(df_expedicao_filtrado)}")
-    print(f"Notas fiscais únicas no CSV: {len(df_agrupado)}")
-    print(f"Notas fiscais sem correspondência: {nfs_sem_match}")
+    print(f"Notas fiscais com status válido e operação VOG (após filtros): {len(df_expedicao_filtrado)}")
+    print(f"Notas fiscais únicas no CSV (após filtros): {len(df_agrupado)}")
+    print(f"Notas fiscais do expedição sem correspondência no CSV: {nfs_sem_match_expedicao}")
+    print(f"Notas fiscais do CSV sem correspondência no expedição: {nfs_sem_match_csv}")
     
     # Estatísticas por status
     print(f"\nDistribuição por status:")
     for status in status_validos:
         count = len(df_expedicao_filtrado[df_expedicao_filtrado['STATUS'] == status])
         print(f"  {status}: {count}")
+    
+    # Estatísticas por operação
+    if 'OPERAÇÃO' in df_expedicao_filtrado.columns:
+        print(f"\nDistribuição por operação VOG:")
+        operacoes_count = df_expedicao_filtrado['OPERAÇÃO'].value_counts()
+        for operacao, count in operacoes_count.items():
+            print(f"  {operacao}: {count}")
 
 if __name__ == "__main__":
     processar_planilhas()
