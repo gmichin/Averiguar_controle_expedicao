@@ -376,7 +376,7 @@ def processar_planilhas():
         # Converte a coluna DATA da planilha de expedição para datetime
         if 'DATA' in df_expedicao_filtrado.columns:
             # Cria uma cópia da coluna DATA para usar no relatório final
-            df_expedicao_filtrado['DATA_RELATORIO'] = pd.to_datetime(df_expedicao_filtrado['DATA'], errors='coerce')
+            df_expedicao_filtrado['DATA_EXPEDICAO'] = pd.to_datetime(df_expedicao_filtrado['DATA'], errors='coerce')
             
             # APLICA FILTRO DE DATA NA PLANILHA DE EXPEDIÇÃO
             if data_inicio or data_fim:
@@ -384,17 +384,17 @@ def processar_planilhas():
                 
                 # Aplica os filtros de data
                 if data_inicio:
-                    df_expedicao_filtrado = df_expedicao_filtrado[df_expedicao_filtrado['DATA_RELATORIO'] >= data_inicio]
+                    df_expedicao_filtrado = df_expedicao_filtrado[df_expedicao_filtrado['DATA_EXPEDICAO'] >= data_inicio]
                 if data_fim:
                     # Adiciona 1 dia para incluir a data final completa
                     data_fim_ajustada = data_fim + pd.Timedelta(days=1)
-                    df_expedicao_filtrado = df_expedicao_filtrado[df_expedicao_filtrado['DATA_RELATORIO'] < data_fim_ajustada]
+                    df_expedicao_filtrado = df_expedicao_filtrado[df_expedicao_filtrado['DATA_EXPEDICAO'] < data_fim_ajustada]
                 
                 print(f"Período filtrado na expedição: {data_inicio.strftime('%d/%m/%Y') if data_inicio else 'Início indefinido'} a {data_fim.strftime('%d/%m/%Y') if data_fim else 'Fim indefinido'}")
                 print(f"Notas fiscais na expedição após filtro de data: {len(df_expedicao_filtrado)}")
         else:
             print("AVISO: Coluna DATA não encontrada na planilha de expedição")
-            df_expedicao_filtrado['DATA_RELATORIO'] = None
+            df_expedicao_filtrado['DATA_EXPEDICAO'] = None
         
         # Limpa os valores monetários (usaremos apenas internamente para comparação)
         print("Limpando valores do controle de expedição...")
@@ -435,19 +435,17 @@ def processar_planilhas():
     df_csv['PESO_COMPARACAO'] = peso_limpo
     df_csv['TOTAL_COMPARACAO'] = total_limpo
     
-    # Cria um dicionário com todas as datas do CSV para consulta rápida
-    dict_datas_csv = {}
-    for index, row in df_csv.iterrows():
-        nf = row['NOTA FISCAL']
-        data = row['DATA'] if 'DATA' in row and not pd.isna(row['DATA']) else None
-        if nf not in dict_datas_csv and data is not None:
-            dict_datas_csv[nf] = data
+    # Converte a coluna DATA do CSV para datetime se existir
+    if 'DATA' in df_csv.columns:
+        df_csv['DATA_CSV'] = pd.to_datetime(df_csv['DATA'], dayfirst=True, errors='coerce')
+    else:
+        df_csv['DATA_CSV'] = None
     
     # Agrupa por NOTA FISCAL mantendo a DATA e somando os valores
     df_agrupado = df_csv.groupby('NOTA FISCAL').agg({
         'PESO': 'first',           # Mantém o valor original do PESO
         'TOTAL': 'first',          # Mantém o valor original do TOTAL
-        'DATA': 'first',           # Mantém a primeira data encontrada
+        'DATA_CSV': 'first',       # Mantém a primeira data do CSV encontrada
         'PESO_COMPARACAO': 'sum',  # Soma os valores limpos para comparação
         'TOTAL_COMPARACAO': 'sum'  # Soma os valores limpos para comparação
     }).reset_index()
@@ -490,18 +488,15 @@ def processar_planilhas():
         operacao = row['OPERAÇÃO'] if 'OPERAÇÃO' in row else ''
         merge_status = row['_merge']
         
-        # Obtém a data - PRIORIDADE para a data da planilha de expedição
-        data_final = None
+        # Obtém as DATAS de ambas as fontes
+        data_expedicao = None
+        data_csv = None
         
-        # Primeiro tenta a data da planilha de expedição (DATA_RELATORIO)
-        if 'DATA_RELATORIO' in row and not pd.isna(row['DATA_RELATORIO']):
-            data_final = row['DATA_RELATORIO']
-        # Se não tiver, tenta a data do CSV do merge
-        elif 'DATA' in row and not pd.isna(row['DATA']):
-            data_final = row['DATA']
-        # Se não tiver, tenta a data do dicionário do CSV
-        elif nf in dict_datas_csv:
-            data_final = dict_datas_csv[nf]
+        if 'DATA_EXPEDICAO' in row and not pd.isna(row['DATA_EXPEDICAO']):
+            data_expedicao = row['DATA_EXPEDICAO']
+        
+        if 'DATA_CSV' in row and not pd.isna(row['DATA_CSV']):
+            data_csv = row['DATA_CSV']
         
         divergencias = []
         
@@ -536,7 +531,8 @@ def processar_planilhas():
         if divergencias:
             resultados.append({
                 'NF': nf,
-                'DATA': data_final,  # Usa a data encontrada (prioridade para expedição)
+                'DATA_EXPEDICAO': data_expedicao,  # Data da expedição
+                'DATA_CSV': data_csv,              # Data do CSV
                 'STATUS': status,
                 'OPERAÇÃO': operacao,
                 'Divergências': ' | '.join(divergencias),
@@ -549,8 +545,7 @@ def processar_planilhas():
     # 2. DIVERGÊNCIAS DO CSV (NFs que não estão no controle de expedição)
     for index, row in nfs_csv_sem_expedicao.iterrows():
         nf = row['NOTA FISCAL']
-        # CORREÇÃO: Verifica se a coluna DATA existe antes de acessá-la
-        data_csv = row['DATA'] if 'DATA' in row and not pd.isna(row['DATA']) else None
+        data_csv = row['DATA_CSV'] if 'DATA_CSV' in row and not pd.isna(row['DATA_CSV']) else None
         
         # CORREÇÃO: Verifica se as colunas PESO e TOTAL existem
         peso_csv = row['PESO'] if 'PESO' in row else ''
@@ -558,7 +553,8 @@ def processar_planilhas():
         
         resultados.append({
             'NF': nf,
-            'DATA': data_csv,
+            'DATA_EXPEDICAO': None,      # Não tem data da expedição
+            'DATA_CSV': data_csv,        # Data do CSV
             'STATUS': 'N/A',
             'OPERAÇÃO': 'N/A',
             'Divergências': 'NF do CSV não encontrada no controle de expedição',
@@ -572,8 +568,19 @@ def processar_planilhas():
     if resultados:
         df_relatorio = pd.DataFrame(resultados)
         
-        # Reorganiza as colunas para colocar DATA logo após NF
-        colunas_ordenadas = ['NF', 'DATA', 'STATUS', 'OPERAÇÃO', 'Divergências', 'VOG_Expedição', 'PESO_CSV', 'R$ NF_Expedição', 'TOTAL_CSV']
+        # Reorganiza as colunas para incluir ambas as datas
+        colunas_ordenadas = [
+            'NF', 
+            'DATA_EXPEDICAO', 
+            'DATA_CSV',
+            'STATUS', 
+            'OPERAÇÃO', 
+            'Divergências', 
+            'VOG_Expedição', 
+            'PESO_CSV', 
+            'R$ NF_Expedição', 
+            'TOTAL_CSV'
+        ]
         # Garante que apenas as colunas existentes sejam usadas
         colunas_ordenadas = [col for col in colunas_ordenadas if col in df_relatorio.columns]
         df_relatorio = df_relatorio[colunas_ordenadas]
@@ -589,11 +596,15 @@ def processar_planilhas():
             # Acessa a planilha para ajustar o formato das colunas
             worksheet = writer.sheets['Divergências']
             
-            # Formata a coluna DATA como data brasileira
-            for row in range(2, len(df_relatorio) + 2):  # +2 porque a linha 1 é o cabeçalho
-                cell = worksheet[f'B{row}']  # Coluna B é DATA
-                if cell.value and not pd.isna(cell.value):
-                    cell.number_format = 'DD/MM/YYYY'
+            # Formata as colunas de data como data brasileira
+            date_columns = ['DATA_EXPEDICAO', 'DATA_CSV']
+            for col_idx, col_name in enumerate(df_relatorio.columns):
+                if col_name in date_columns:
+                    col_letter = chr(65 + col_idx)  # 65 = 'A'
+                    for row in range(2, len(df_relatorio) + 2):  # +2 porque a linha 1 é o cabeçalho
+                        cell = worksheet[f'{col_letter}{row}']
+                        if cell.value and not pd.isna(cell.value):
+                            cell.number_format = 'DD/MM/YYYY'
             
             # Ajusta a largura das colunas automaticamente
             for column in worksheet.columns:
@@ -615,9 +626,13 @@ def processar_planilhas():
         # Exibe as primeiras 10 divergências
         print("\nPrimeiras 10 divergências:")
         for i, resultado in enumerate(resultados[:10]):
-            # Formata a data para exibição no console
-            data_exibicao = resultado['DATA'].strftime('%d/%m/%Y') if resultado['DATA'] and not pd.isna(resultado['DATA']) else 'N/A'
-            print(f"\n{i+1}. NF: {resultado['NF']} | Data: {data_exibicao} | Status: {resultado['STATUS']} | Operação: {resultado['OPERAÇÃO']}")
+            # Formata as datas para exibição no console
+            data_expedicao = resultado['DATA_EXPEDICAO'].strftime('%d/%m/%Y') if resultado['DATA_EXPEDICAO'] and not pd.isna(resultado['DATA_EXPEDICAO']) else 'N/A'
+            data_csv = resultado['DATA_CSV'].strftime('%d/%m/%Y') if resultado['DATA_CSV'] and not pd.isna(resultado['DATA_CSV']) else 'N/A'
+            
+            print(f"\n{i+1}. NF: {resultado['NF']}")
+            print(f"   Data Expedição: {data_expedicao} | Data CSV: {data_csv}")
+            print(f"   Status: {resultado['STATUS']} | Operação: {resultado['OPERAÇÃO']}")
             print(f"   Divergências: {resultado['Divergências']}")
             
         if len(resultados) > 10:
